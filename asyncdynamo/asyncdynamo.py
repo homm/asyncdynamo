@@ -20,7 +20,7 @@ Copyright (c) 2012 bit.ly. All rights reserved.
 import sys
 assert sys.version_info >= (2, 7), "run this with python2.7"
 
-import simplejson as json
+import json
 from tornado.httpclient import HTTPRequest
 from tornado.httpclient import AsyncHTTPClient
 from tornado.ioloop import IOLoop
