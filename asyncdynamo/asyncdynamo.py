@@ -63,7 +63,7 @@ class AsyncDynamoDB(AWSAuthConnection):
     ServiceName = 'DynamoDB'
     """The name of the Service"""
 
-    Version = '20120810'
+    Version = '20111205'
     """DynamoDB API version."""
 
     ThruputError = "ProvisionedThroughputExceededException"
@@ -78,7 +78,7 @@ class AsyncDynamoDB(AWSAuthConnection):
     def __init__(self, aws_access_key_id=None, aws_secret_access_key=None,
                  is_secure=True, port=None, proxy=None, proxy_port=None,
                  host=None, debug=0, session_token=None, endpoint=None,
-                 authenticate_requests=True, validate_cert=True, max_sts_attempts=3, ioloop=None):
+                 authenticate_requests=True, validate_cert=True, max_sts_attempts=3):
         if not host:
             host = self.DefaultHost
         if endpoint is not None:
@@ -106,8 +106,8 @@ class AsyncDynamoDB(AWSAuthConnection):
                                    is_secure, self.port, proxy, proxy_port,
                                    debug=debug, security_token=session_token,
                                    validate_certs=self.validate_cert)
-        self.ioloop = ioloop or IOLoop.instance()
-        self.http_client = AsyncHTTPClient(io_loop=self.ioloop)
+        self.ioloop = IOLoop.current()
+        self.http_client = AsyncHTTPClient()
         self.pending_requests = deque()
         self.sts = AsyncAwsSts(aws_access_key_id,
             aws_secret_access_key,
@@ -199,7 +199,7 @@ class AsyncDynamoDB(AWSAuthConnection):
                 # create a callback to handle errors getting session token
                 # callback here is assumed to take a json response, and an instance of DynamoDBResponseError
                 if error:
-                    return callback({}, error=DynamoDBResponseError(error.status, error.reason, error.body))
+                    return callback({}, error=DynamoDBResponseError(error.status, error.reason))
                 else:
                     return
             self._update_session_token(cb_for_update)
