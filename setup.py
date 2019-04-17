@@ -1,5 +1,5 @@
 import os
-from distutils.core import setup
+from setuptools import setup
 
 # also update version in __init__.py
 version = '0.2.8'
@@ -20,5 +20,4 @@ setup(
     packages=['asyncdynamo'],
     install_requires=['tornado', 'boto>=2.3.0'],
     requires=['tornado'],
-    download_url="https://s3.amazonaws.com/bitly-downloads/asyncdynamo/asyncdynamo-%s.tar.gz" % version,
 )
