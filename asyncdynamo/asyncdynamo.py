@@ -63,7 +63,7 @@ class AsyncDynamoDB(AWSAuthConnection):
     ServiceName = 'DynamoDB'
     """The name of the Service"""
 
-    Version = '20120810'
+    Version = '20111205'
     """DynamoDB API version."""
 
     ThruputError = "ProvisionedThroughputExceededException"
