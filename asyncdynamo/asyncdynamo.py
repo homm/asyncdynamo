@@ -199,7 +199,7 @@ class AsyncDynamoDB(AWSAuthConnection):
                 # create a callback to handle errors getting session token
                 # callback here is assumed to take a json response, and an instance of DynamoDBResponseError
                 if error:
-                    return callback({}, error=DynamoDBResponseError(error.status, error.reason, error.body))
+                    return callback({}, error=DynamoDBResponseError(error.status, error.reason))
                 else:
                     return
             self._update_session_token(cb_for_update)
