@@ -18,6 +18,8 @@ Created by Dan Frank on 2012-01-23.
 Copyright (c) 2012 bit.ly. All rights reserved.
 """
 
+from __future__ import unicode_literals
+
 import json
 from tornado.httpclient import HTTPRequest
 from tornado.httpclient import AsyncHTTPClient
@@ -26,14 +28,14 @@ import functools
 from collections import deque
 import time
 import logging
-from urlparse import urlparse
+from six.moves.urllib_parse import urlparse
 
 from boto.connection import AWSAuthConnection
 from boto.exception import DynamoDBResponseError
 from boto.auth import HmacAuthV4Handler
 from boto.provider import Provider
 
-from async_aws_sts import AsyncAwsSts, InvalidClientTokenIdError
+from .async_aws_sts import AsyncAwsSts, InvalidClientTokenIdError
 
 
 PENDING_SESSION_TOKEN_UPDATE = "this is not your session token"
@@ -203,6 +205,7 @@ class AsyncDynamoDB(AWSAuthConnection):
                     return
             self._update_session_token(cb_for_update)
             return
+        body = body.encode('utf-8')
         headers = {'X-Amz-Target': '%s_%s.%s' % (self.ServiceName,
                                                  self.Version, action),
                    'Content-Type': 'application/x-amz-json-1.0',

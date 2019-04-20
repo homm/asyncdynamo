@@ -18,6 +18,8 @@ Created by Dan Frank on 2012-01-25.
 Copyright (c) 2012 bit.ly. All rights reserved.
 """
 
+from __future__ import unicode_literals
+
 import functools
 from tornado.httpclient import HTTPRequest
 from tornado.httpclient import AsyncHTTPClient
