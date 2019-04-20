@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import os
 from setuptools import setup
 
@@ -18,6 +20,9 @@ setup(
         "License :: OSI Approved :: Apache Software License",
     ],
     packages=['asyncdynamo'],
-    install_requires=['tornado', 'boto>=2.3.0'],
-    requires=['tornado'],
+    install_requires=[
+        'tornado',
+        'boto',
+        'six',
+    ],
 )
