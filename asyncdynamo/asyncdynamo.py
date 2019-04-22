@@ -17,8 +17,8 @@
 Created by Dan Frank on 2012-01-23.
 Copyright (c) 2012 bit.ly. All rights reserved.
 """
-import sys
-assert sys.version_info >= (2, 7), "run this with python2.7"
+
+from __future__ import unicode_literals
 
 import json
 from tornado.httpclient import HTTPRequest
@@ -28,16 +28,18 @@ import functools
 from collections import deque
 import time
 import logging
-from urlparse import urlparse
+from six.moves.urllib_parse import urlparse
 
 from boto.connection import AWSAuthConnection
 from boto.exception import DynamoDBResponseError
 from boto.auth import HmacAuthV4Handler
 from boto.provider import Provider
 
-from async_aws_sts import AsyncAwsSts, InvalidClientTokenIdError
+from .async_aws_sts import AsyncAwsSts, InvalidClientTokenIdError
+
 
 PENDING_SESSION_TOKEN_UPDATE = "this is not your session token"
+
 
 class AsyncDynamoDB(AWSAuthConnection):
     """
@@ -78,7 +80,8 @@ class AsyncDynamoDB(AWSAuthConnection):
     def __init__(self, aws_access_key_id=None, aws_secret_access_key=None,
                  is_secure=True, port=None, proxy=None, proxy_port=None,
                  host=None, debug=0, session_token=None, endpoint=None,
-                 authenticate_requests=True, validate_cert=True, max_sts_attempts=3):
+                 authenticate_requests=True, validate_cert=True,
+                 max_sts_attempts=3):
         if not host:
             host = self.DefaultHost
         if endpoint is not None:
@@ -109,34 +112,29 @@ class AsyncDynamoDB(AWSAuthConnection):
         self.ioloop = IOLoop.current()
         self.http_client = AsyncHTTPClient()
         self.pending_requests = deque()
-        self.sts = AsyncAwsSts(aws_access_key_id,
-            aws_secret_access_key,
-            is_secure, self.port, proxy, proxy_port)
+        self.sts = AsyncAwsSts(aws_access_key_id, aws_secret_access_key,
+                               is_secure, self.port, proxy, proxy_port)
         assert (isinstance(max_sts_attempts, int) and max_sts_attempts >= 0)
         self.max_sts_attempts = max_sts_attempts
-
-    def _init_session_token_cb(self, error=None):
-        if error:
-            logging.warn("Unable to get session token: %s" % error)
 
     def _required_auth_capability(self):
         return ['hmac-v4']
 
     def _update_session_token(self, callback, attempts=0, bypass_lock=False):
-        '''
+        """
         Begins the logic to get a new session token. Performs checks to ensure
         that only one request goes out at a time and that backoff is respected, so
         it can be called repeatedly with no ill effects. Set bypass_lock to True to
         override this behavior.
-        '''
+        """
         if self.provider.security_token == PENDING_SESSION_TOKEN_UPDATE and not bypass_lock:
             return
-        self.provider.security_token = PENDING_SESSION_TOKEN_UPDATE # invalidate the current security token
+        self.provider.security_token = PENDING_SESSION_TOKEN_UPDATE  # invalidate the current security token
         return self.sts.get_session_token(
             functools.partial(self._update_session_token_cb, callback=callback, attempts=attempts))
 
     def _update_session_token_cb(self, creds, provider='aws', callback=None, error=None, attempts=0):
-        '''
+        """
         Callback to use with `async_aws_sts`. The 'provider' arg is a bit misleading,
         it is a relic from boto and should probably be left to its default. This will
         take the new Credentials obj from `async_aws_sts.get_session_token()` and use
@@ -144,7 +142,7 @@ class AsyncDynamoDB(AWSAuthConnection):
 
         A callback is optional. If provided, it must be callable without any arguments,
         but also accept an optional error argument that will be an instance of BotoServerError.
-        '''
+        """
         def raise_error():
             # get out of locked state
             self.provider.security_token = None
@@ -180,55 +178,60 @@ class AsyncDynamoDB(AWSAuthConnection):
                 return callback()
 
     def make_request(self, action, body='', callback=None, object_hook=None):
-        '''
+        """
         Make an asynchronous HTTP request to DynamoDB. Callback should operate on
         the decoded json response (with object hook applied, of course). It should also
         accept an error argument, which will be a boto.exception.DynamoDBResponseError.
 
         If there is not a valid session token, this method will ensure that a new one is fetched
         and cache the request when it is retrieved.
-        '''
+        """
         this_request = functools.partial(self.make_request, action=action,
             body=body, callback=callback,object_hook=object_hook)
         if self.authenticate_requests and self.provider.security_token in [None, PENDING_SESSION_TOKEN_UPDATE]:
-            # we will not be able to complete this request because we do not have a valid session token.
-            # queue it and try to get a new one. _update_session_token will ensure that only one request
+            # we will not be able to complete this request because we do not
+            # have a valid session token. queue it and try to get a new one.
+            # _update_session_token will ensure that only one request
             # for a session token goes out at a time
             self.pending_requests.appendleft(this_request)
+
             def cb_for_update(error=None):
                 # create a callback to handle errors getting session token
-                # callback here is assumed to take a json response, and an instance of DynamoDBResponseError
+                # callback here is assumed to take a json response,
+                # and an instance of DynamoDBResponseError
                 if error:
                     return callback({}, error=DynamoDBResponseError(error.status, error.reason))
                 else:
                     return
             self._update_session_token(cb_for_update)
             return
-        headers = {'X-Amz-Target' : '%s_%s.%s' % (self.ServiceName,
-                                                  self.Version, action),
-                'Content-Type' : 'application/x-amz-json-1.0',
-                'Content-Length' : str(len(body))}
-        request = HTTPRequest(self.url,
-            method='POST',
-            headers=headers,
-            body=body,
-            validate_cert=self.validate_cert)
-        request.path = '/' # Important! set the path variable for signing by boto (<2.7). '/' is the path for all dynamodb requests
-        request.auth_path = '/' # Important! set the auth_path variable for signing by boto(>2.7). '/' is the path for all dynamodb requests
+        body = body.encode('utf-8')
+        headers = {'X-Amz-Target': '%s_%s.%s' % (self.ServiceName,
+                                                 self.Version, action),
+                   'Content-Type': 'application/x-amz-json-1.0',
+                   'Content-Length': str(len(body))}
+        request = HTTPRequest(self.url, method='POST', headers=headers,
+                              body=body, validate_cert=self.validate_cert)
+        request.path = '/'  # Important! set the path variable for signing by boto (<2.7). '/' is the path for all dynamodb requests
+        request.auth_path = '/'  # Important! set the auth_path variable for signing by boto(>2.7). '/' is the path for all dynamodb requests
         request.params = {}
         request.port = self.port
         request.protocol = self.protocol
         request.host = self.host
         if self.authenticate_requests:
-            self._auth_handler.add_auth(request) # add signature to headers of the request
-        self.http_client.fetch(request, functools.partial(self._finish_make_request,
-            callback=callback, orig_request=this_request, token_used=self.provider.security_token, object_hook=object_hook)) # bam!
+            self._auth_handler.add_auth(request)  # add signature to headers of the request
+        callback = functools.partial(
+            self._finish_make_request, callback=callback,
+            orig_request=this_request, token_used=self.provider.security_token,
+            object_hook=object_hook
+        )
+        self.http_client.fetch(request, callback)
 
     def _finish_make_request(self, response, callback, orig_request, token_used, object_hook=None):
-        '''
+        """
         Check for errors and decode the json response (in the tornado response body), then pass on to orig callback.
         This method also contains some of the logic to handle reacquiring session tokens.
-        '''
+        """
         try:
             json_response = json.loads(response.body, object_hook=object_hook)
         except TypeError:
@@ -236,16 +239,20 @@ class AsyncDynamoDB(AWSAuthConnection):
 
         if json_response and response.error:
             # Normal error handling where we have a JSON response from AWS.
-            if any((token_error in json_response.get('__type', []) \
+            if any((token_error in json_response.get('__type', [])
                     for token_error in (self.ExpiredSessionError, self.UnrecognizedClientException))):
                 if self.provider.security_token == token_used:
                     # the token that we used has expired. wipe it out
                     self.provider.security_token = None
-                return orig_request() # make_request will handle logic to get a new token if needed, and queue until it is fetched
+                return orig_request()  # make_request will handle logic to get a new token if needed, and queue until it is fetched
             else:
                 # because some errors are benign, include the response when an error is passed
-                return callback(json_response, error=DynamoDBResponseError(response.error.code,
-                    response.error.message, json_response))
+                return callback(
+                    json_response,
+                    error=DynamoDBResponseError(response.error.code,
+                                                response.error.message,
+                                                json_response)
+                )
 
         if json_response is None:
             # We didn't get any JSON back, but we also didn't receive an error response. This can't be right.
@@ -255,7 +262,7 @@ class AsyncDynamoDB(AWSAuthConnection):
 
     def get_item(self, table_name, key, callback, attributes_to_get=None,
             consistent_read=False, object_hook=None):
-        '''
+        """
         Return a set of attributes for an item that matches
         the supplied key.
 
@@ -277,7 +284,8 @@ class AsyncDynamoDB(AWSAuthConnection):
         :type consistent_read: bool
         :param consistent_read: If True, a consistent read
             request is issued.  Otherwise, an eventually consistent
-            request is issued.        '''
+            request is issued.
+        """
         data = {'TableName': table_name,
                 'Key': key}
         if attributes_to_get:
@@ -285,7 +293,7 @@ class AsyncDynamoDB(AWSAuthConnection):
         if consistent_read:
             data['ConsistentRead'] = True
         return self.make_request('GetItem', body=json.dumps(data),
-            callback=callback, object_hook=object_hook)
+                                 callback=callback, object_hook=object_hook)
 
     def batch_get_item(self, request_items, callback):
         """
@@ -299,12 +307,12 @@ class AsyncDynamoDB(AWSAuthConnection):
         :param request_items: A Python version of the RequestItems
             data structure defined by DynamoDB.
         """
-        data = {'RequestItems' : request_items}
+        data = {'RequestItems': request_items}
         json_input = json.dumps(data)
         self.make_request('BatchGetItem', json_input, callback)
 
     def put_item(self, table_name, item, callback, expected=None, return_values=None, object_hook=None):
-        '''
+        """
         Create a new item or replace an old item with a new
         item (including all attributes).  If an item already
         exists in the specified table with the same primary
@@ -332,9 +340,9 @@ class AsyncDynamoDB(AWSAuthConnection):
             values are: None or 'ALL_OLD'. If 'ALL_OLD' is
             specified and the item is overwritten, the content
             of the old item is returned.
-        '''
-        data = {'TableName' : table_name,
-                'Item' : item}
+        """
+        data = {'TableName': table_name,
+                'Item': item}
         if expected:
             data['Expected'] = expected
         if return_values:
@@ -347,7 +355,7 @@ class AsyncDynamoDB(AWSAuthConnection):
               attributes_to_get=None, limit=None, consistent_read=False,
               scan_index_forward=True, exclusive_start_key=None,
               object_hook=None):
-        '''
+        """
         Perform a query of DynamoDB.  This version is currently punting
         and expecting you to provide a full and correct JSON body
         which is passed as is to DynamoDB.
@@ -359,7 +367,7 @@ class AsyncDynamoDB(AWSAuthConnection):
         :param table_name: The name of the table to delete.
 
         :type hash_key_value: dict
-        :param key: A DynamoDB-style HashKeyValue.
+        :param hash_key_value: A DynamoDB-style HashKeyValue.
 
         :type range_key_conditions: dict
         :param range_key_conditions: A Python version of the
@@ -386,7 +394,7 @@ class AsyncDynamoDB(AWSAuthConnection):
         :param exclusive_start_key: Primary key of the item from
             which to continue an earlier query.  This would be
             provided as the LastEvaluatedKey in that query.
-        '''
+        """
         data = {'TableName': table_name,
                 'HashKeyValue': hash_key_value}
         if range_key_conditions:
