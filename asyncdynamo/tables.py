@@ -9,15 +9,40 @@ from tornado import gen
 from .asyncdynamo import AsyncDynamoDB
 
 
+class Item(object):
+    def __repr__(self):
+        table = getattr(type(self), 'table')  # type: Table
+        table_name = table.table_name if table else 'unknown'
+        return "<{}({}): {}>".format(
+            type(self).__name__, table_name, repr(self.__dict__))
+
+
 class Table(object):
-    def __init__(self, connection, table_name, schema,
+    base_item_class = Item
+
+    def __init__(self, connection, table_name, schema, defaults=None,
                  dynamizer=LossyFloatDynamizer):
         self.connection = connection  # type: AsyncDynamoDB
         self.table_name = table_name
         self.schema = schema  # type: Schema
+        self.defaults = defaults  # type: dict
         self.layer2 = boto.connect_dynamodb(
             dynamizer=dynamizer,
             aws_access_key_id='dummy', aws_secret_access_key='dummy')
+
+        class TableItem(self.base_item_class):
+            table = self
+        self.item_class = TableItem
+
+    def __repr__(self):
+        return "<{}: {}>".format(type(self).__name__, self.table_name)
+
+    def make_item(self, data):
+        item = self.item_class()
+        if self.defaults:
+            item.__dict__.update(self.defaults)
+        item.__dict__.update(data)
+        return item
 
     @gen.coroutine
     def get_item(self, hash_key, range_key=None, **kwargs):
@@ -38,7 +63,7 @@ class Table(object):
         if 'Item' not in resp:
             raise exceptions.DynamoDBKeyNotFoundError("Key does not exist.")
 
-        raise gen.Return(resp['Item'])
+        raise gen.Return(self.make_item(resp['Item']))
 
     @gen.coroutine
     def query(self, hash_key, range_key_conditions=None,
@@ -67,7 +92,10 @@ class Table(object):
             last_key = resp['LastEvaluatedKey']
             last_key = last_key['HashKeyElement'], last_key['RangeKeyElement']
 
-        raise gen.Return((resp.get('Items', []), last_key))
+        items = resp.get('Items', [])
+        items = [self.make_item(item) for item in items]
+
+        raise gen.Return((items, last_key))
 
     @gen.coroutine
     def query_all(self, *args, **kwargs):
