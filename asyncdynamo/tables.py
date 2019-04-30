@@ -20,11 +20,11 @@ class Item(object):
 class Table(object):
     base_item_class = Item
 
-    def __init__(self, connection, table_name, schema, defaults=None,
+    def __init__(self, connection, table_name, primary_key, defaults=None,
                  dynamizer=LossyFloatDynamizer):
         self.connection = connection  # type: AsyncDynamoDB
         self.table_name = table_name
-        self.schema = schema  # type: Schema
+        self.primary_key = primary_key  # type: Schema
         self.defaults = defaults  # type: dict
         self.layer2 = boto.connect_dynamodb(
             dynamizer=dynamizer,
@@ -46,12 +46,12 @@ class Table(object):
 
     @gen.coroutine
     def get_item(self, hash_key, range_key=None, **kwargs):
-        if self.schema.range_key_name is not None:
+        if self.primary_key.range_key_name is not None:
             if range_key is None:
                 raise ValueError('Range key is required')
 
         key = self.layer2.build_key_from_values(
-            self.schema, hash_key, range_key)
+            self.primary_key, hash_key, range_key)
         object_hook = self.layer2.dynamizer.decode
 
         (resp,), kwargs = yield gen.Task(self.connection.get_item,
@@ -69,10 +69,10 @@ class Table(object):
     def query(self, hash_key, range_key_conditions=None,
               exclusive_start_key=None, **kwargs):
         key = self.layer2.build_key_from_values(
-            self.schema, hash_key)['HashKeyElement']
+            self.primary_key, hash_key)['HashKeyElement']
         if exclusive_start_key:
             exclusive_start_key = self.layer2.build_key_from_values(
-                self.schema, *exclusive_start_key)
+                self.primary_key, *exclusive_start_key)
         if range_key_conditions:
             range_key_conditions = range_key_conditions.to_dict()
         object_hook = self.layer2.dynamizer.decode
