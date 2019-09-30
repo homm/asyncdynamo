@@ -121,6 +121,7 @@ class AsyncDynamoDB(AWSAuthConnection):
     def _required_auth_capability(self):
         return ['hmac-v4']
 
+    @gen.engine
     def _update_session_token(self, callback, attempts=0, bypass_lock=False):
         """
         Begins the logic to get a new session token. Performs checks to ensure
@@ -131,8 +132,8 @@ class AsyncDynamoDB(AWSAuthConnection):
         if self.provider.security_token == PENDING_SESSION_TOKEN_UPDATE and not bypass_lock:
             return
         self.provider.security_token = PENDING_SESSION_TOKEN_UPDATE  # invalidate the current security token
-        return self.sts.get_session_token(
-            functools.partial(self._update_session_token_cb, callback=callback, attempts=attempts))
+        result = yield self.sts.get_session_token()
+        self._update_session_token_cb(result, callback=callback, attempts=attempts)
 
     def _update_session_token_cb(self, creds, provider='aws', callback=None, error=None, attempts=0):
         """

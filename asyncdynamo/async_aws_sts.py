@@ -20,11 +20,10 @@ Copyright (c) 2012 bit.ly. All rights reserved.
 
 from __future__ import unicode_literals
 
-import time
 import functools
 from tornado import gen
 from tornado.httpclient import HTTPRequest, HTTPError
-from tornado.httpclient import HTTPResponse, AsyncHTTPClient
+from tornado.httpclient import AsyncHTTPClient
 import xml.sax
 
 import boto.handler
@@ -63,16 +62,15 @@ class AsyncAwsSts(STSConnection):
                                converter)
         self.http_client = AsyncHTTPClient()
 
-    def get_session_token(self, callback):
+    def get_session_token(self):
         """
         Gets a new Credentials object with a session token, using this
-        instance's aws keys. Callback should operate on the new Credentials obj,
-        or else a boto.exception.BotoServerError
+        instance's aws keys.
         """
-        return self.get_object('GetSessionToken', {}, Credentials, verb='POST', callback=callback)
+        return self.get_object('GetSessionToken', {}, Credentials, verb='POST')
 
-    @gen.engine
-    def get_object(self, action, params, cls, path="/", parent=None, verb="GET", callback=None):
+    @gen.coroutine
+    def get_object(self, action, params, cls, path="/", parent=None, verb="GET"):
         """
         Get an instance of `cls` using `action`
         """
@@ -86,17 +84,18 @@ class AsyncAwsSts(STSConnection):
         """
         error = response.error
         if error:
+            if not isinstance(error, HTTPError):
+                raise error
             if error.code == 403:
                 error_class = InvalidClientTokenIdError
             else:
                 error_class = BotoServerError
-            return callback(None, error=error_class(error.code, error.message, response.body))
+            raise error_class(error.code, error.message, response.body)
         obj = cls(parent)
         h = boto.handler.XmlHandler(obj, parent)
         xml.sax.parseString(response.body, h)
-        return callback(obj)
+        raise gen.Return(obj)
 
-    @gen.coroutine
     def make_request(self, action, params=None, path='/', verb='GET'):
         """
         Make an async request. This handles the logic of translating from boto params
@@ -114,14 +113,4 @@ class AsyncAwsSts(STSConnection):
             request.params['Version'] = self.APIVersion
         self._auth_handler.add_auth(request)  # add signature
 
-        try:
-            response = yield self.http_client.fetch(request)
-        except Exception as exc:
-            if isinstance(exc, HTTPError) and exc.response is not None:
-                response = exc.response
-            else:
-                response = HTTPResponse(
-                    request, 599, error=exc,
-                    request_time=time.time() - request.start_time)
-
-        raise gen.Return(response)
+        return self.http_client.fetch(request, raise_error=False)
