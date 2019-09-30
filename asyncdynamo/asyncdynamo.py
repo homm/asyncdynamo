@@ -189,7 +189,7 @@ class AsyncDynamoDB(AWSAuthConnection):
         and cache the request when it is retrieved.
         """
         this_request = functools.partial(self.make_request, action=action,
-            body=body, callback=callback,object_hook=object_hook)
+            body=body, callback=callback, object_hook=object_hook)
         if self.authenticate_requests and self.provider.security_token in [None, PENDING_SESSION_TOKEN_UPDATE]:
             # we will not be able to complete this request because we do not
             # have a valid session token. queue it and try to get a new one.
@@ -232,11 +232,7 @@ class AsyncDynamoDB(AWSAuthConnection):
                 response = HTTPResponse(
                     request, 599, error=exc,
                     request_time=time.time() - request.start_time)
-        self._finish_make_request(response, callback=callback,
-            orig_request=this_request, token_used=self.provider.security_token,
-            object_hook=object_hook)
 
-    def _finish_make_request(self, response, callback, orig_request, token_used, object_hook=None):
         """
         Check for errors and decode the json response (in the tornado response body), then pass on to orig callback.
         This method also contains some of the logic to handle reacquiring session tokens.
@@ -250,10 +246,11 @@ class AsyncDynamoDB(AWSAuthConnection):
             # Normal error handling where we have a JSON response from AWS.
             if any((token_error in json_response.get('__type', [])
                     for token_error in (self.ExpiredSessionError, self.UnrecognizedClientException))):
+                token_used = self.provider.security_token
                 if self.provider.security_token == token_used:
                     # the token that we used has expired. wipe it out
                     self.provider.security_token = None
-                return orig_request()  # make_request will handle logic to get a new token if needed, and queue until it is fetched
+                return this_request()  # make_request will handle logic to get a new token if needed, and queue until it is fetched
             else:
                 # because some errors are benign, include the response when an error is passed
                 return callback(
@@ -318,7 +315,7 @@ class AsyncDynamoDB(AWSAuthConnection):
         """
         data = {'RequestItems': request_items}
         json_input = json.dumps(data)
-        self.make_request('BatchGetItem', json_input, callback)
+        return self.make_request('BatchGetItem', json_input, callback)
 
     def put_item(self, table_name, item, callback, expected=None, return_values=None, object_hook=None):
         """

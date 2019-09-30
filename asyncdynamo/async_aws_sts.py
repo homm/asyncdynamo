@@ -20,6 +20,7 @@ Copyright (c) 2012 bit.ly. All rights reserved.
 
 from __future__ import unicode_literals
 
+import time
 import functools
 from tornado import gen
 from tornado.httpclient import HTTPRequest, HTTPError
@@ -70,40 +71,36 @@ class AsyncAwsSts(STSConnection):
         """
         return self.get_object('GetSessionToken', {}, Credentials, verb='POST', callback=callback)
 
+    @gen.engine
     def get_object(self, action, params, cls, path="/", parent=None, verb="GET", callback=None):
         """
         Get an instance of `cls` using `action`
         """
         if not parent:
             parent = self
-        callback = functools.partial(self._finish_get_object, callback=callback,
-                                     parent=parent, cls=cls)
-        self.make_request(action, params, path, verb, callback)
+        response = yield self.make_request(action, params, path, verb)
 
-    def _finish_get_object(self, response_body, callback, cls=None, parent=None, error=None):
         """
         Process the body returned by STS. If an error is present, convert from a tornado error
         to a boto error
         """
+        error = response.error
         if error:
             if error.code == 403:
                 error_class = InvalidClientTokenIdError
             else:
                 error_class = BotoServerError
-            return callback(None, error=error_class(error.code, error.message, response_body))
+            return callback(None, error=error_class(error.code, error.message, response.body))
         obj = cls(parent)
         h = boto.handler.XmlHandler(obj, parent)
-        xml.sax.parseString(response_body, h)
+        xml.sax.parseString(response.body, h)
         return callback(obj)
 
-    @gen.engine
-    def make_request(self, action, params=None, path='/', verb='GET', callback=None):
+    @gen.coroutine
+    def make_request(self, action, params=None, path='/', verb='GET'):
         """
         Make an async request. This handles the logic of translating from boto params
         to a tornado request obj, issuing the request, and passing back the body.
-
-        The callback should operate on the body of the response, and take an optional
-        error argument that will be a tornado error
         """
         request = HTTPRequest('https://%s' % self.host, method=verb)
         request.params = params or {}
@@ -126,9 +123,5 @@ class AsyncAwsSts(STSConnection):
                 response = HTTPResponse(
                     request, 599, error=exc,
                     request_time=time.time() - request.start_time)
-        self._finish_make_request(response, callback=callback)
 
-    def _finish_make_request(self, response, callback):
-        if response.error:
-            return callback(response.body, error=response.error)
-        return callback(response.body)
+        raise gen.Return(response)
