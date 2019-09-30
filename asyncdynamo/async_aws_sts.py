@@ -21,8 +21,9 @@ Copyright (c) 2012 bit.ly. All rights reserved.
 from __future__ import unicode_literals
 
 import functools
-from tornado.httpclient import HTTPRequest
-from tornado.httpclient import AsyncHTTPClient
+from tornado import gen
+from tornado.httpclient import HTTPRequest, HTTPError
+from tornado.httpclient import HTTPResponse, AsyncHTTPClient
 import xml.sax
 
 import boto.handler
@@ -95,6 +96,7 @@ class AsyncAwsSts(STSConnection):
         xml.sax.parseString(response_body, h)
         return callback(obj)
 
+    @gen.engine
     def make_request(self, action, params=None, path='/', verb='GET', callback=None):
         """
         Make an async request. This handles the logic of translating from boto params
@@ -114,7 +116,17 @@ class AsyncAwsSts(STSConnection):
         if self.APIVersion:
             request.params['Version'] = self.APIVersion
         self._auth_handler.add_auth(request)  # add signature
-        self.http_client.fetch(request, functools.partial(self._finish_make_request, callback=callback))
+
+        try:
+            response = yield self.http_client.fetch(request)
+        except Exception as exc:
+            if isinstance(exc, HTTPError) and exc.response is not None:
+                response = exc.response
+            else:
+                response = HTTPResponse(
+                    request, 599, error=exc,
+                    request_time=time.time() - request.start_time)
+        self._finish_make_request(response, callback=callback)
 
     def _finish_make_request(self, response, callback):
         if response.error:

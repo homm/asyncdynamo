@@ -21,8 +21,9 @@ Copyright (c) 2012 bit.ly. All rights reserved.
 from __future__ import unicode_literals
 
 import json
-from tornado.httpclient import HTTPRequest
-from tornado.httpclient import AsyncHTTPClient
+from tornado import gen
+from tornado.httpclient import HTTPRequest, HTTPError
+from tornado.httpclient import HTTPResponse, AsyncHTTPClient
 from tornado.ioloop import IOLoop
 import functools
 from collections import deque
@@ -177,6 +178,7 @@ class AsyncDynamoDB(AWSAuthConnection):
             if callable(callback):
                 return callback()
 
+    @gen.engine
     def make_request(self, action, body='', callback=None, object_hook=None):
         """
         Make an asynchronous HTTP request to DynamoDB. Callback should operate on
@@ -220,12 +222,19 @@ class AsyncDynamoDB(AWSAuthConnection):
         request.host = self.host
         if self.authenticate_requests:
             self._auth_handler.add_auth(request)  # add signature to headers of the request
-        callback = functools.partial(
-            self._finish_make_request, callback=callback,
+
+        try:
+            response = yield self.http_client.fetch(request)
+        except Exception as exc:
+            if isinstance(exc, HTTPError) and exc.response is not None:
+                response = exc.response
+            else:
+                response = HTTPResponse(
+                    request, 599, error=exc,
+                    request_time=time.time() - request.start_time)
+        self._finish_make_request(response, callback=callback,
             orig_request=this_request, token_used=self.provider.security_token,
-            object_hook=object_hook
-        )
-        self.http_client.fetch(request, callback)
+            object_hook=object_hook)
 
     def _finish_make_request(self, response, callback, orig_request, token_used, object_hook=None):
         """
