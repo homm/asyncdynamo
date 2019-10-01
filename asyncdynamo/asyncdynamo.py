@@ -178,8 +178,8 @@ class AsyncDynamoDB(AWSAuthConnection):
             if callable(callback):
                 return callback()
 
-    @gen.engine
-    def make_request(self, action, body='', callback=None, object_hook=None):
+    @gen.coroutine
+    def make_request(self, action, body='', object_hook=None):
         """
         Make an asynchronous HTTP request to DynamoDB. Callback should operate on
         the decoded json response (with object hook applied, of course). It should also
@@ -189,7 +189,7 @@ class AsyncDynamoDB(AWSAuthConnection):
         and cache the request when it is retrieved.
         """
         this_request = functools.partial(self.make_request, action=action,
-            body=body, callback=callback, object_hook=object_hook)
+            body=body, object_hook=object_hook)
         if self.authenticate_requests and self.provider.security_token in [None, PENDING_SESSION_TOKEN_UPDATE]:
             # we will not be able to complete this request because we do not
             # have a valid session token. queue it and try to get a new one.
@@ -205,8 +205,8 @@ class AsyncDynamoDB(AWSAuthConnection):
                     return callback({}, error=DynamoDBResponseError(error.status, error.reason))
                 else:
                     return
-            self._update_session_token(cb_for_update)
-            return
+            yield gen.Task(self._update_session_token)
+
         body = body.encode('utf-8')
         headers = {'X-Amz-Target': '%s_%s.%s' % (self.ServiceName,
                                                  self.Version, action),
@@ -247,20 +247,16 @@ class AsyncDynamoDB(AWSAuthConnection):
                 return this_request()  # make_request will handle logic to get a new token if needed, and queue until it is fetched
             else:
                 # because some errors are benign, include the response when an error is passed
-                return callback(
-                    json_response,
-                    error=DynamoDBResponseError(response.error.code,
-                                                response.error.message,
-                                                json_response)
-                )
+                raise DynamoDBResponseError(response.error.code,
+                                            response.error.message,
+                                            json_response)
 
         if json_response is None:
             # We didn't get any JSON back, but we also didn't receive an error response. This can't be right.
-            return callback(None, error=DynamoDBResponseError(response.code, response.body))
-        else:
-            return callback(json_response, error=None)
+            raise DynamoDBResponseError(response.code, response.body)
+        raise gen.Return(json_response)
 
-    def get_item(self, table_name, key, callback, attributes_to_get=None,
+    def get_item(self, table_name, key, attributes_to_get=None,
             consistent_read=False, object_hook=None):
         """
         Return a set of attributes for an item that matches
@@ -293,9 +289,9 @@ class AsyncDynamoDB(AWSAuthConnection):
         if consistent_read:
             data['ConsistentRead'] = True
         return self.make_request('GetItem', body=json.dumps(data),
-                                 callback=callback, object_hook=object_hook)
+                                 object_hook=object_hook)
 
-    def batch_get_item(self, request_items, callback):
+    def batch_get_item(self, request_items):
         """
         Return a set of attributes for a multiple items in
         multiple tables using their primary keys.
@@ -309,9 +305,9 @@ class AsyncDynamoDB(AWSAuthConnection):
         """
         data = {'RequestItems': request_items}
         json_input = json.dumps(data)
-        return self.make_request('BatchGetItem', json_input, callback)
+        return self.make_request('BatchGetItem', json_input)
 
-    def put_item(self, table_name, item, callback, expected=None, return_values=None, object_hook=None):
+    def put_item(self, table_name, item, expected=None, return_values=None, object_hook=None):
         """
         Create a new item or replace an old item with a new
         item (including all attributes).  If an item already
@@ -348,10 +344,9 @@ class AsyncDynamoDB(AWSAuthConnection):
         if return_values:
             data['ReturnValues'] = return_values
         json_input = json.dumps(data)
-        return self.make_request('PutItem', json_input, callback=callback,
-                                 object_hook=object_hook)
+        return self.make_request('PutItem', json_input, object_hook=object_hook)
 
-    def query(self, table_name, hash_key_value, callback, range_key_conditions=None,
+    def query(self, table_name, hash_key_value, range_key_conditions=None,
               attributes_to_get=None, limit=None, consistent_read=False,
               scan_index_forward=True, exclusive_start_key=None,
               object_hook=None):
@@ -413,4 +408,4 @@ class AsyncDynamoDB(AWSAuthConnection):
             data['ExclusiveStartKey'] = exclusive_start_key
         json_input = json.dumps(data)
         return self.make_request('Query', body=json_input,
-                                 callback=callback, object_hook=object_hook)
+                                 object_hook=object_hook)

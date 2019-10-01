@@ -54,11 +54,9 @@ class Table(object):
             self.primary_key, hash_key, range_key)
         object_hook = self.layer2.dynamizer.decode
 
-        (resp,), kwargs = yield gen.Task(self.connection.get_item,
-                                         self.table_name, key,
-                                         object_hook=object_hook, **kwargs)
-        if kwargs['error']:
-            raise kwargs['error']
+        resp = yield self.connection.get_item(
+            self.table_name, key,
+            object_hook=object_hook, **kwargs)
 
         if 'Item' not in resp:
             raise exceptions.DynamoDBKeyNotFoundError("Key does not exist.")
@@ -77,15 +75,11 @@ class Table(object):
             range_key_conditions = range_key_conditions.to_dict()
         object_hook = self.layer2.dynamizer.decode
 
-        (resp,), kwargs = yield gen.Task(
-            self.connection.query,
+        resp = yield self.connection.query(
             self.table_name, key,
             exclusive_start_key=exclusive_start_key,
             range_key_conditions=range_key_conditions,
             object_hook=object_hook, **kwargs)
-
-        if kwargs['error']:
-            raise kwargs['error']
 
         last_key = None
         if 'LastEvaluatedKey' in resp:
