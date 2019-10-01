@@ -22,8 +22,7 @@ from __future__ import unicode_literals
 
 import functools
 from tornado import gen
-from tornado.httpclient import HTTPRequest, HTTPError
-from tornado.httpclient import AsyncHTTPClient
+from tornado.httpclient import AsyncHTTPClient, HTTPRequest, HTTPError
 import xml.sax
 
 import boto.handler
@@ -77,6 +76,8 @@ class AsyncAwsSts(STSConnection):
         if not parent:
             parent = self
         response = yield self.make_request(action, params, path, verb)
+        if response.error and not isinstance(response.error, HTTPError):
+            raise response.error
 
         """
         Process the body returned by STS. If an error is present, convert from a tornado error
@@ -84,8 +85,6 @@ class AsyncAwsSts(STSConnection):
         """
         error = response.error
         if error:
-            if not isinstance(error, HTTPError):
-                raise error
             if error.code == 403:
                 error_class = InvalidClientTokenIdError
             else:

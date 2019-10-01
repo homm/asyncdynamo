@@ -22,8 +22,7 @@ from __future__ import unicode_literals
 
 import json
 from tornado import gen
-from tornado.httpclient import HTTPRequest, HTTPError
-from tornado.httpclient import HTTPResponse, AsyncHTTPClient
+from tornado.httpclient import AsyncHTTPClient, HTTPRequest, HTTPError
 from tornado.ioloop import IOLoop
 import functools
 from collections import deque
@@ -132,8 +131,8 @@ class AsyncDynamoDB(AWSAuthConnection):
         if self.provider.security_token == PENDING_SESSION_TOKEN_UPDATE and not bypass_lock:
             return
         self.provider.security_token = PENDING_SESSION_TOKEN_UPDATE  # invalidate the current security token
-        result = yield self.sts.get_session_token()
-        self._update_session_token_cb(result, callback=callback, attempts=attempts)
+        creds = yield self.sts.get_session_token()
+        self._update_session_token_cb(creds, callback=callback, attempts=attempts)
 
     def _update_session_token_cb(self, creds, provider='aws', callback=None, error=None, attempts=0):
         """
@@ -224,15 +223,9 @@ class AsyncDynamoDB(AWSAuthConnection):
         if self.authenticate_requests:
             self._auth_handler.add_auth(request)  # add signature to headers of the request
 
-        try:
-            response = yield self.http_client.fetch(request)
-        except Exception as exc:
-            if isinstance(exc, HTTPError) and exc.response is not None:
-                response = exc.response
-            else:
-                response = HTTPResponse(
-                    request, 599, error=exc,
-                    request_time=time.time() - request.start_time)
+        response = yield self.http_client.fetch(request, raise_error=False)
+        if response.error and not isinstance(response.error, HTTPError):
+            raise response.error
 
         """
         Check for errors and decode the json response (in the tornado response body), then pass on to orig callback.
