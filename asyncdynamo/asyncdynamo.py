@@ -23,10 +23,6 @@ from __future__ import unicode_literals
 import json
 from tornado import gen
 from tornado.httpclient import AsyncHTTPClient, HTTPRequest, HTTPError
-from tornado.ioloop import IOLoop
-import functools
-from collections import deque
-import time
 import logging
 from six.moves.urllib_parse import urlparse
 
@@ -109,74 +105,56 @@ class AsyncDynamoDB(AWSAuthConnection):
                                    is_secure, self.port, proxy, proxy_port,
                                    debug=debug, security_token=session_token,
                                    validate_certs=self.validate_cert)
-        self.ioloop = IOLoop.current()
         self.http_client = AsyncHTTPClient()
-        self.pending_requests = deque()
         self.sts = AsyncAwsSts(aws_access_key_id, aws_secret_access_key,
                                is_secure, self.port, proxy, proxy_port)
         assert (isinstance(max_sts_attempts, int) and max_sts_attempts >= 0)
         self.max_sts_attempts = max_sts_attempts
+        self._wait_session_token = None
 
     def _required_auth_capability(self):
         return ['hmac-v4']
 
-    @gen.engine
-    def _update_session_token(self, callback, attempts=0, bypass_lock=False):
-        """
-        Begins the logic to get a new session token. Performs checks to ensure
-        that only one request goes out at a time and that backoff is respected, so
-        it can be called repeatedly with no ill effects. Set bypass_lock to True to
-        override this behavior.
-        """
-        if self.provider.security_token == PENDING_SESSION_TOKEN_UPDATE and not bypass_lock:
-            return
-        self.provider.security_token = PENDING_SESSION_TOKEN_UPDATE  # invalidate the current security token
-        creds = yield self.sts.get_session_token()
-        self._update_session_token_cb(creds, callback=callback, attempts=attempts)
+    def update_session_token(self, already_used_future=None):
+        def reset_on_error(f):
+            if f.exception():
+                self._wait_session_token = None
 
-    def _update_session_token_cb(self, creds, provider='aws', callback=None, error=None, attempts=0):
-        """
-        Callback to use with `async_aws_sts`. The 'provider' arg is a bit misleading,
-        it is a relic from boto and should probably be left to its default. This will
-        take the new Credentials obj from `async_aws_sts.get_session_token()` and use
-        it to update self.provider, and then will clear the deque of pending requests.
+        # This future was already tried and is invalid
+        if already_used_future == self._wait_session_token:
+            self._wait_session_token = None
 
-        A callback is optional. If provided, it must be callable without any arguments,
-        but also accept an optional error argument that will be an instance of BotoServerError.
-        """
-        def raise_error():
-            # get out of locked state
-            self.provider.security_token = None
-            if callable(callback):
-                return callback(error=error)
+        if self._wait_session_token is None:
+            self._wait_session_token = self._get_session_token()
+            self._wait_session_token.add_done_callback(reset_on_error)
+        return self._wait_session_token
+
+    @gen.coroutine
+    def _get_session_token(self):
+        attempts = 0
+        while True:
+            try:
+                creds = yield self.sts.get_session_token()
+            except InvalidClientTokenIdError:
+                raise
+            except Exception as e:
+                if attempts >= self.max_sts_attempts:
+                    raise
+                seconds_to_wait = 0.1 * (2 ** attempts)
+                logging.warning("Got error[ %s ] getting session token, retrying in %.02f seconds" % (e, seconds_to_wait))
+                yield gen.sleep(seconds_to_wait)
+                attempts += 1
             else:
-                logging.error(error)
-                raise error
-        if error:
-            if isinstance(error, InvalidClientTokenIdError):
-                # no need to retry if error is due to bad tokens
-                raise_error()
-            else:
-                if attempts > self.max_sts_attempts:
-                    raise_error()
-                else:
-                    seconds_to_wait = (0.1*(2**attempts))
-                    logging.warning("Got error[ %s ] getting session token, retrying in %.02f seconds" % (error, seconds_to_wait))
-                    self.ioloop.add_timeout(time.time() + seconds_to_wait,
-                        functools.partial(self._update_session_token, attempts=attempts+1, callback=callback, bypass_lock=True))
-                    return
-        else:
-            self.provider = Provider(provider,
-                                     creds.access_key,
-                                     creds.secret_key,
-                                     creds.session_token)
-            # force the correct auth, with the new provider
-            self._auth_handler = HmacAuthV4Handler(self.host, None, self.provider)
-            while self.pending_requests:
-                request = self.pending_requests.pop()
-                request()
-            if callable(callback):
-                return callback()
+                self._set_credentionals(creds)
+                break
+
+    def _set_credentionals(self, creds):
+        self.provider = Provider('aws',
+                                 creds.access_key,
+                                 creds.secret_key,
+                                 creds.session_token)
+        # force the correct auth, with the new provider
+        self._auth_handler = HmacAuthV4Handler(self.host, None, self.provider)
 
     @gen.coroutine
     def make_request(self, action, body='', object_hook=None):
@@ -188,32 +166,18 @@ class AsyncDynamoDB(AWSAuthConnection):
         If there is not a valid session token, this method will ensure that a new one is fetched
         and cache the request when it is retrieved.
         """
-        this_request = functools.partial(self.make_request, action=action,
-            body=body, object_hook=object_hook)
-        if self.authenticate_requests and self.provider.security_token in [None, PENDING_SESSION_TOKEN_UPDATE]:
-            # we will not be able to complete this request because we do not
-            # have a valid session token. queue it and try to get a new one.
-            # _update_session_token will ensure that only one request
-            # for a session token goes out at a time
-            self.pending_requests.appendleft(this_request)
+        token_future = None
+        if self.authenticate_requests:
+            token_future = self.update_session_token()
+            yield token_future
 
-            def cb_for_update(error=None):
-                # create a callback to handle errors getting session token
-                # callback here is assumed to take a json response,
-                # and an instance of DynamoDBResponseError
-                if error:
-                    return callback({}, error=DynamoDBResponseError(error.status, error.reason))
-                else:
-                    return
-            yield gen.Task(self._update_session_token)
-
-        body = body.encode('utf-8')
+        binary_body = body.encode('utf-8')
         headers = {'X-Amz-Target': '%s_%s.%s' % (self.ServiceName,
                                                  self.Version, action),
                    'Content-Type': 'application/x-amz-json-1.0',
-                   'Content-Length': str(len(body))}
+                   'Content-Length': str(len(binary_body))}
         request = HTTPRequest(self.url, method='POST', headers=headers,
-                              body=body, validate_cert=self.validate_cert)
+                              body=binary_body, validate_cert=self.validate_cert)
         request.path = '/'  # Important! set the path variable for signing by boto (<2.7). '/' is the path for all dynamodb requests
         request.auth_path = '/'  # Important! set the auth_path variable for signing by boto(>2.7). '/' is the path for all dynamodb requests
         request.params = {}
@@ -238,13 +202,12 @@ class AsyncDynamoDB(AWSAuthConnection):
 
         if json_response and response.error:
             # Normal error handling where we have a JSON response from AWS.
-            if any((token_error in json_response.get('__type', [])
-                    for token_error in (self.ExpiredSessionError, self.UnrecognizedClientException))):
-                token_used = self.provider.security_token
-                if self.provider.security_token == token_used:
-                    # the token that we used has expired. wipe it out
-                    self.provider.security_token = None
-                return this_request()  # make_request will handle logic to get a new token if needed, and queue until it is fetched
+            if json_response.get('__type', '') in [self.ExpiredSessionError,
+                                                   self.UnrecognizedClientException]:
+                # the token that we used has expired. wipe it out
+                self.update_session_token(token_future)
+                resp = yield self.make_request(action, body, object_hook)
+                raise gen.Return(resp)
             else:
                 # because some errors are benign, include the response when an error is passed
                 raise DynamoDBResponseError(response.error.code,
@@ -257,7 +220,7 @@ class AsyncDynamoDB(AWSAuthConnection):
         raise gen.Return(json_response)
 
     def get_item(self, table_name, key, attributes_to_get=None,
-            consistent_read=False, object_hook=None):
+                 consistent_read=False, object_hook=None):
         """
         Return a set of attributes for an item that matches
         the supplied key.

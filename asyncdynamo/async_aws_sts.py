@@ -102,8 +102,8 @@ class AsyncAwsSts(STSConnection):
         """
         request = HTTPRequest('https://%s' % self.host, method=verb)
         request.params = params or {}
-        request.auth_path = '/' # need this for auth
-        request.host = self.host # need this for auth
+        request.auth_path = '/'  # need this for auth
+        request.host = self.host  # need this for auth
         request.port = 443
         request.protocol = self.protocol
         if action:
