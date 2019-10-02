@@ -4,7 +4,7 @@ import os
 from setuptools import setup
 
 # also update version in __init__.py
-version = '0.2.8'
+version = '1.0.0'
 
 setup(
     name="asyncdynamo",

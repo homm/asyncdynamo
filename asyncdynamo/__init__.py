@@ -21,5 +21,5 @@ http://github.com/bitly/asyncdynamo
 """
 
 
-version = "0.2.8"
-version_info = (0, 2, 8)
+version = "1.0.0"
+version_info = (1, 0, 0)
