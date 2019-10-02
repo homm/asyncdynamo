@@ -34,9 +34,6 @@ from boto.provider import Provider
 from .async_aws_sts import AsyncAwsSts, InvalidClientTokenIdError
 
 
-PENDING_SESSION_TOKEN_UPDATE = "this is not your session token"
-
-
 class AsyncDynamoDB(AWSAuthConnection):
     """
     The main class for asynchronous connections to DynamoDB.

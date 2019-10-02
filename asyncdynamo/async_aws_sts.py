@@ -20,7 +20,6 @@ Copyright (c) 2012 bit.ly. All rights reserved.
 
 from __future__ import unicode_literals
 
-import functools
 from tornado import gen
 from tornado.httpclient import AsyncHTTPClient, HTTPRequest, HTTPError
 import xml.sax
