@@ -20,9 +20,8 @@ Copyright (c) 2012 bit.ly. All rights reserved.
 
 from __future__ import unicode_literals
 
-import functools
-from tornado.httpclient import HTTPRequest
-from tornado.httpclient import AsyncHTTPClient
+from tornado import gen
+from tornado.httpclient import AsyncHTTPClient, HTTPRequest, HTTPError
 import xml.sax
 
 import boto.handler
@@ -61,52 +60,49 @@ class AsyncAwsSts(STSConnection):
                                converter)
         self.http_client = AsyncHTTPClient()
 
-    def get_session_token(self, callback):
+    def get_session_token(self):
         """
         Gets a new Credentials object with a session token, using this
-        instance's aws keys. Callback should operate on the new Credentials obj,
-        or else a boto.exception.BotoServerError
+        instance's aws keys.
         """
-        return self.get_object('GetSessionToken', {}, Credentials, verb='POST', callback=callback)
+        return self.get_object('GetSessionToken', {}, Credentials, verb='POST')
 
-    def get_object(self, action, params, cls, path="/", parent=None, verb="GET", callback=None):
+    @gen.coroutine
+    def get_object(self, action, params, cls, path="/", parent=None, verb="GET"):
         """
         Get an instance of `cls` using `action`
         """
         if not parent:
             parent = self
-        callback = functools.partial(self._finish_get_object, callback=callback,
-                                     parent=parent, cls=cls)
-        self.make_request(action, params, path, verb, callback)
+        response = yield self.make_request(action, params, path, verb)
+        if response.error and not isinstance(response.error, HTTPError):
+            raise response.error
 
-    def _finish_get_object(self, response_body, callback, cls=None, parent=None, error=None):
         """
         Process the body returned by STS. If an error is present, convert from a tornado error
         to a boto error
         """
+        error = response.error
         if error:
             if error.code == 403:
                 error_class = InvalidClientTokenIdError
             else:
                 error_class = BotoServerError
-            return callback(None, error=error_class(error.code, error.message, response_body))
+            raise error_class(error.code, error.message, response.body)
         obj = cls(parent)
         h = boto.handler.XmlHandler(obj, parent)
-        xml.sax.parseString(response_body, h)
-        return callback(obj)
+        xml.sax.parseString(response.body, h)
+        raise gen.Return(obj)
 
-    def make_request(self, action, params=None, path='/', verb='GET', callback=None):
+    def make_request(self, action, params=None, path='/', verb='GET'):
         """
         Make an async request. This handles the logic of translating from boto params
         to a tornado request obj, issuing the request, and passing back the body.
-
-        The callback should operate on the body of the response, and take an optional
-        error argument that will be a tornado error
         """
         request = HTTPRequest('https://%s' % self.host, method=verb)
         request.params = params or {}
-        request.auth_path = '/' # need this for auth
-        request.host = self.host # need this for auth
+        request.auth_path = '/'  # need this for auth
+        request.host = self.host  # need this for auth
         request.port = 443
         request.protocol = self.protocol
         if action:
@@ -114,9 +110,5 @@ class AsyncAwsSts(STSConnection):
         if self.APIVersion:
             request.params['Version'] = self.APIVersion
         self._auth_handler.add_auth(request)  # add signature
-        self.http_client.fetch(request, functools.partial(self._finish_make_request, callback=callback))
 
-    def _finish_make_request(self, response, callback):
-        if response.error:
-            return callback(response.body, error=response.error)
-        return callback(response.body)
+        return self.http_client.fetch(request, raise_error=False)
