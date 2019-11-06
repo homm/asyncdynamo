@@ -4,7 +4,7 @@ import os
 from setuptools import setup
 
 # also update version in __init__.py
-version = '1.0.0'
+version = '2.0.0'
 
 setup(
     name="asyncdynamo",
@@ -23,6 +23,5 @@ setup(
     install_requires=[
         'tornado',
         'boto',
-        'six',
     ],
 )

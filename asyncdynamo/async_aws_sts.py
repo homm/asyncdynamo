@@ -18,12 +18,8 @@ Created by Dan Frank on 2012-01-25.
 Copyright (c) 2012 bit.ly. All rights reserved.
 """
 
-from __future__ import unicode_literals
-
-from tornado import gen
-from tornado.httpclient import AsyncHTTPClient, HTTPRequest, HTTPError
 import xml.sax
-
+from tornado.httpclient import AsyncHTTPClient, HTTPRequest, HTTPError
 import boto.handler
 from boto.sts.connection import STSConnection
 from boto.sts.credentials import Credentials
@@ -67,14 +63,13 @@ class AsyncAwsSts(STSConnection):
         """
         return self.get_object('GetSessionToken', {}, Credentials, verb='POST')
 
-    @gen.coroutine
-    def get_object(self, action, params, cls, path="/", parent=None, verb="GET"):
+    async def get_object(self, action, params, cls, path="/", parent=None, verb="GET"):
         """
         Get an instance of `cls` using `action`
         """
         if not parent:
             parent = self
-        response = yield self.make_request(action, params, path, verb)
+        response = await self.make_request(action, params, path, verb)
         if response.error and not isinstance(response.error, HTTPError):
             raise response.error
 
@@ -92,9 +87,9 @@ class AsyncAwsSts(STSConnection):
         obj = cls(parent)
         h = boto.handler.XmlHandler(obj, parent)
         xml.sax.parseString(response.body, h)
-        raise gen.Return(obj)
+        return obj
 
-    def make_request(self, action, params=None, path='/', verb='GET'):
+    async def make_request(self, action, params=None, path='/', verb='GET'):
         """
         Make an async request. This handles the logic of translating from boto params
         to a tornado request obj, issuing the request, and passing back the body.
@@ -111,4 +106,4 @@ class AsyncAwsSts(STSConnection):
             request.params['Version'] = self.APIVersion
         self._auth_handler.add_auth(request)  # add signature
 
-        return self.http_client.fetch(request, raise_error=False)
+        return await self.http_client.fetch(request, raise_error=False)

@@ -1,4 +1,3 @@
-#!/bin/env python
 #
 # Copyright 2012 bit.ly
 #
@@ -18,13 +17,12 @@ Created by Dan Frank on 2012-01-23.
 Copyright (c) 2012 bit.ly. All rights reserved.
 """
 
-from __future__ import unicode_literals
-
+import asyncio
 import json
 from tornado import gen
 from tornado.httpclient import AsyncHTTPClient, HTTPRequest, HTTPError
 import logging
-from six.moves.urllib_parse import urlparse
+from urllib.parse import urlparse
 
 from boto.connection import AWSAuthConnection
 from boto.exception import DynamoDBResponseError
@@ -122,16 +120,16 @@ class AsyncDynamoDB(AWSAuthConnection):
             self._wait_session_token = None
 
         if self._wait_session_token is None:
-            self._wait_session_token = self._get_session_token()
+            self._wait_session_token = asyncio.ensure_future(
+                self._get_session_token())
             self._wait_session_token.add_done_callback(reset_on_error)
         return self._wait_session_token
 
-    @gen.coroutine
-    def _get_session_token(self):
+    async def _get_session_token(self):
         attempts = 0
         while True:
             try:
-                creds = yield self.sts.get_session_token()
+                creds = await self.sts.get_session_token()
             except InvalidClientTokenIdError:
                 raise
             except Exception as e:
@@ -139,7 +137,7 @@ class AsyncDynamoDB(AWSAuthConnection):
                     raise
                 seconds_to_wait = 0.1 * (2 ** attempts)
                 logging.warning("Got error[ %s ] getting session token, retrying in %.02f seconds" % (e, seconds_to_wait))
-                yield gen.sleep(seconds_to_wait)
+                await gen.sleep(seconds_to_wait)
                 attempts += 1
             else:
                 self._set_credentionals(creds)
@@ -153,8 +151,7 @@ class AsyncDynamoDB(AWSAuthConnection):
         # force the correct auth, with the new provider
         self._auth_handler = HmacAuthV4Handler(self.host, None, self.provider)
 
-    @gen.coroutine
-    def make_request(self, action, body='', object_hook=None):
+    async def make_request(self, action, body='', object_hook=None):
         """
         Make an asynchronous HTTP request to DynamoDB. Callback should operate on
         the decoded json response (with object hook applied, of course). It should also
@@ -166,7 +163,7 @@ class AsyncDynamoDB(AWSAuthConnection):
         token_future = None
         if self.authenticate_requests:
             token_future = self.update_session_token()
-            yield token_future
+            await token_future
 
         binary_body = body.encode('utf-8')
         headers = {'X-Amz-Target': '%s_%s.%s' % (self.ServiceName,
@@ -184,7 +181,7 @@ class AsyncDynamoDB(AWSAuthConnection):
         if self.authenticate_requests:
             self._auth_handler.add_auth(request)  # add signature to headers of the request
 
-        response = yield self.http_client.fetch(request, raise_error=False)
+        response = await self.http_client.fetch(request, raise_error=False)
         if response.error and not isinstance(response.error, HTTPError):
             raise response.error
 
@@ -203,8 +200,8 @@ class AsyncDynamoDB(AWSAuthConnection):
                                                    self.UnrecognizedClientException]:
                 # the token that we used has expired. wipe it out
                 self.update_session_token(token_future)
-                resp = yield self.make_request(action, body, object_hook)
-                raise gen.Return(resp)
+                resp = await self.make_request(action, body, object_hook)
+                return resp
             else:
                 # because some errors are benign, include the response when an error is passed
                 raise DynamoDBResponseError(response.error.code,
@@ -214,7 +211,7 @@ class AsyncDynamoDB(AWSAuthConnection):
         if json_response is None:
             # We didn't get any JSON back, but we also didn't receive an error response. This can't be right.
             raise DynamoDBResponseError(response.code, response.body)
-        raise gen.Return(json_response)
+        return json_response
 
     def get_item(self, table_name, key, attributes_to_get=None,
                  consistent_read=False, object_hook=None):

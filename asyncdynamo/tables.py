@@ -1,10 +1,7 @@
-from __future__ import unicode_literals
-
 import boto
 from boto.dynamodb import exceptions
 from boto.dynamodb.types import LossyFloatDynamizer
 from boto.dynamodb.schema import Schema
-from tornado import gen
 
 from .asyncdynamo import AsyncDynamoDB
 
@@ -44,8 +41,7 @@ class Table(object):
         item.__dict__.update(data)
         return item
 
-    @gen.coroutine
-    def get_item(self, hash_key, range_key=None, **kwargs):
+    async def get_item(self, hash_key, range_key=None, **kwargs):
         if self.primary_key.range_key_name is not None:
             if range_key is None:
                 raise ValueError('Range key is required')
@@ -54,18 +50,17 @@ class Table(object):
             self.primary_key, hash_key, range_key)
         object_hook = self.layer2.dynamizer.decode
 
-        resp = yield self.connection.get_item(
+        resp = await self.connection.get_item(
             self.table_name, key,
             object_hook=object_hook, **kwargs)
 
         if 'Item' not in resp:
             raise exceptions.DynamoDBKeyNotFoundError("Key does not exist.")
 
-        raise gen.Return(self.make_item(resp['Item']))
+        return self.make_item(resp['Item'])
 
-    @gen.coroutine
-    def query(self, hash_key, range_key_conditions=None,
-              exclusive_start_key=None, **kwargs):
+    async def query(self, hash_key, range_key_conditions=None,
+                    exclusive_start_key=None, **kwargs):
         key = self.layer2.build_key_from_values(
             self.primary_key, hash_key)['HashKeyElement']
         if exclusive_start_key:
@@ -75,7 +70,7 @@ class Table(object):
             range_key_conditions = range_key_conditions.to_dict()
         object_hook = self.layer2.dynamizer.decode
 
-        resp = yield self.connection.query(
+        resp = await self.connection.query(
             self.table_name, key,
             exclusive_start_key=exclusive_start_key,
             range_key_conditions=range_key_conditions,
@@ -89,18 +84,17 @@ class Table(object):
         items = resp.get('Items', [])
         items = [self.make_item(item) for item in items]
 
-        raise gen.Return((items, last_key))
+        return (items, last_key)
 
-    @gen.coroutine
-    def query_all(self, *args, **kwargs):
+    async def query_all(self, *args, **kwargs):
         assert 'exclusive_start_key' not in kwargs
 
         all_items = []
         last_key, first_run = None, True
         while last_key or first_run:
             first_run = False
-            items, last_key = yield self.query(
+            items, last_key = await self.query(
                 *args, exclusive_start_key=last_key, **kwargs)
             all_items.extend(items)
 
-        raise gen.Return(all_items)
+        return all_items
